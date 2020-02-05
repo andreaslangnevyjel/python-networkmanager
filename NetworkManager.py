@@ -34,7 +34,13 @@ class SignalDispatcher(object):
         if not self.setup:
             bus = dbus.SystemBus()
             for interface in self.interfaces:
-                bus.add_signal_receiver(self.handle_signal, dbus_interface=interface, interface_keyword="interface", member_keyword="signal", path_keyword="path")
+                bus.add_signal_receiver(
+                    self.handle_signal,
+                    dbus_interface=interface,
+                    interface_keyword="interface",
+                    member_keyword="signal",
+                    path_keyword="path",
+                )
             self.setup = True
         self.listen_for_restarts()
 
@@ -109,7 +115,7 @@ xml_cache = {}
 
 
 class NMDbusInterfaceType(type):
-    """Metaclass that generates our classes based on introspection data"""
+    """ Metaclass that generates our classes based on introspection data """
     dbus_service = "org.freedesktop.NetworkManager"
 
     def __new__(type_, name, bases, attrs):
@@ -407,34 +413,104 @@ def device_class(typ):
         NM_DEVICE_TYPE_PPP: PPP,
         NM_DEVICE_TYPE_OVS_INTERFACE: OvsIf,
         NM_DEVICE_TYPE_OVS_PORT: OvsPort,
-        NM_DEVICE_TYPE_OVS_BRIDGE: OvsBridge
+        NM_DEVICE_TYPE_OVS_BRIDGE: OvsBridge,
     }[typ]
 
 
-class Adsl(Device): pass
-class Bluetooth(Device): pass
-class Bond(Device): pass
-class Bridge(Device): pass
-class Generic(Device): pass
-class Infiniband(Device): pass
-class IPTunnel(Device): pass
-class Macvlan(Device): pass
-class Modem(Device): pass
-class OlpcMesh(Device): pass
-class Team(Device): pass
-class Tun(Device): pass
-class Veth(Device): pass
-class Vlan(Device): pass
-class Vxlan(Device): pass
-class Wimax(Device): pass
-class Wired(Device): pass
-class Wireless(Device): pass
-class MacSec(Device): pass
-class Dummy(Device): pass
-class PPP(Device): pass
-class OvsIf(Device): pass
-class OvsPort(Device): pass
-class OvsBridge(Device): pass
+class Adsl(Device):
+    pass
+
+
+class Bluetooth(Device):
+    pass
+
+
+class Bond(Device):
+    pass
+
+
+class Bridge(Device):
+    pass
+
+
+class Generic(Device):
+    pass
+
+
+class Infiniband(Device):
+    pass
+
+
+class IPTunnel(Device):
+    pass
+
+
+class Macvlan(Device):
+    pass
+
+
+class Modem(Device):
+    pass
+
+
+class OlpcMesh(Device):
+    pass
+
+
+class Team(Device):
+    pass
+
+
+class Tun(Device):
+    pass
+
+
+class Veth(Device):
+    pass
+
+
+class Vlan(Device):
+    pass
+
+
+class Vxlan(Device):
+    pass
+
+
+class Wimax(Device):
+    pass
+
+
+class Wired(Device):
+    pass
+
+
+class Wireless(Device):
+    pass
+
+
+class MacSec(Device):
+    pass
+
+
+class Dummy(Device):
+    pass
+
+
+class PPP(Device):
+    pass
+
+
+class OvsIf(Device):
+    pass
+
+
+class OvsPort(Device):
+    pass
+
+
+class OvsBridge(Device):
+    pass
 
 
 class NSP(TransientNMDbusInterface):
@@ -513,8 +589,8 @@ class fixups(object):
         if arg in ("connection" 'properties') and signature == 'a{sa{sv}}':
             settings = copy.deepcopy(val)
             for key in settings:
-                if 'mac-address' in settings[key]:
-                    settings[key]['mac-address'] = fixups.mac_to_dbus(settings[key]['mac-address'])
+                if "mac-address" in settings[key]:
+                    settings[key]["mac-address"] = fixups.mac_to_dbus(settings[key]["mac-address"])
                 if 'cloned-mac-address' in settings[key]:
                     settings[key]['cloned-mac-address'] = fixups.mac_to_dbus(settings[key]['cloned-mac-address'])
                 if 'bssid' in settings[key]:
@@ -531,17 +607,17 @@ class fixups(object):
                     settings["ipv4"]['address-data'] = dbus.Array(
                         settings["ipv4"]['address-data'],
                         signature=dbus.Signature('a{sv}'))
-                if 'addresses' in settings["ipv4"]:
-                    settings["ipv4"]['addresses'] = [fixups.addrconf_to_dbus(addr, socket.AF_INET) for addr in settings["ipv4"]['addresses']]
-                if 'routes' in settings["ipv4"]:
-                    settings["ipv4"]['routes'] = [fixups.route_to_dbus(route, socket.AF_INET) for route in settings["ipv4"]['routes']]
+                if "addresses" in settings["ipv4"]:
+                    settings["ipv4"]["addresses"] = [fixups.addrconf_to_dbus(addr, socket.AF_INET) for addr in settings["ipv4"]["addresses"]]
+                if "routes" in settings["ipv4"]:
+                    settings["ipv4"]["routes"] = [fixups.route_to_dbus(route, socket.AF_INET) for route in settings["ipv4"]["routes"]]
                 if "dns" in settings["ipv4"]:
                     settings["ipv4"]["dns"] = [fixups.addr_to_dbus(addr, socket.AF_INET) for addr in settings["ipv4"]["dns"]]
             if "ipv6" in settings:
-                if 'addresses' in settings["ipv6"]:
-                    settings["ipv6"]['addresses'] = [fixups.addrconf_to_dbus(addr, socket.AF_INET6) for addr in settings["ipv6"]['addresses']]
-                if 'routes' in settings["ipv6"]:
-                    settings["ipv6"]['routes'] = [fixups.route_to_dbus(route, socket.AF_INET6) for route in settings["ipv6"]['routes']]
+                if "addresses" in settings["ipv6"]:
+                    settings["ipv6"]["addresses"] = [fixups.addrconf_to_dbus(addr, socket.AF_INET6) for addr in settings["ipv6"]["addresses"]]
+                if "routes" in settings["ipv6"]:
+                    settings["ipv6"]["routes"] = [fixups.route_to_dbus(route, socket.AF_INET6) for route in settings["ipv6"]["routes"]]
                 if "dns" in settings["ipv6"]:
                     settings["ipv6"]["dns"] = [fixups.addr_to_dbus(addr, socket.AF_INET6) for addr in settings["ipv6"]["dns"]]
             # Get rid of empty arrays/dicts. dbus barfs on them (can't guess
@@ -606,19 +682,19 @@ class fixups(object):
                 val['802-11-wireless']["ssid"] = fixups.ssid_to_python(val['802-11-wireless']["ssid"])
             for key in val:
                 val_ = val[key]
-                if 'mac-address' in val_:
-                    val_['mac-address'] = fixups.mac_to_python(val_['mac-address'])
+                if "mac-address" in val_:
+                    val_["mac-address"] = fixups.mac_to_python(val_["mac-address"])
                 if 'cloned-mac-address' in val_:
                     val_['cloned-mac-address'] = fixups.mac_to_python(val_['cloned-mac-address'])
                 if 'bssid' in val_:
                     val_['bssid'] = fixups.mac_to_python(val_['bssid'])
             if "ipv4" in val:
-                val["ipv4"]['addresses'] = [fixups.addrconf_to_python(addr, socket.AF_INET) for addr in val["ipv4"]['addresses']]
-                val["ipv4"]['routes'] = [fixups.route_to_python(route, socket.AF_INET) for route in val["ipv4"]['routes']]
+                val["ipv4"]["addresses"] = [fixups.addrconf_to_python(addr, socket.AF_INET) for addr in val["ipv4"]["addresses"]]
+                val["ipv4"]["routes"] = [fixups.route_to_python(route, socket.AF_INET) for route in val["ipv4"]["routes"]]
                 val["ipv4"]["dns"] = [fixups.addr_to_python(addr, socket.AF_INET) for addr in val["ipv4"]["dns"]]
             if "ipv6" in val:
-                val["ipv6"]['addresses'] = [fixups.addrconf_to_python(addr, socket.AF_INET6) for addr in val["ipv6"]['addresses']]
-                val["ipv6"]['routes'] = [fixups.route_to_python(route, socket.AF_INET6) for route in val["ipv6"]['routes']]
+                val["ipv6"]["addresses"] = [fixups.addrconf_to_python(addr, socket.AF_INET6) for addr in val["ipv6"]["addresses"]]
+                val["ipv6"]["routes"] = [fixups.route_to_python(route, socket.AF_INET6) for route in val["ipv6"]["routes"]]
                 val["ipv6"]["dns"] = [fixups.addr_to_python(addr, socket.AF_INET6) for addr in val["ipv6"]["dns"]]
             return val
         if method == 'PropertiesChanged':
