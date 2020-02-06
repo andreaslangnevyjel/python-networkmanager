@@ -1,3 +1,6 @@
+#!/usr/bin/python3-mwct -Otu
+# -*- coding: utf-8 -*-
+#
 # Reads the Networkmanager headers and spits out the enums as a series of
 # python variables.
 
@@ -5,7 +8,7 @@ import os
 import re
 import sys
 
-enum_regex = re.compile(r'typedef enum(?:\s+[a-zA-Z]+)?\s*\{(.*?)\}', re.DOTALL)
+enum_regex = re.compile(r"typedef enum(?:\s+[a-zA-Z]+)?\s*\{(.*?)\}", re.DOTALL)
 comment_regex = re.compile(r"/\*.*?\*/", re.DOTALL)
 headers = [
     "/usr/include/libnm/nm-dbus-interface.h",

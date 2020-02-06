@@ -10,11 +10,10 @@ import socket
 import struct
 import time
 import warnings
-import xml.etree.ElementTree as etree
+from lxml import etree
 
 import dbus
 import dbus.service
-import six
 
 
 class ObjectVanished(Exception):
@@ -47,7 +46,11 @@ class SignalDispatcher(object):
     def listen_for_restarts(self):
         # If we have a mainloop, listen for disconnections
         if not NMDbusInterface.last_disconnect and dbus.get_default_main_loop():
-            dbus.SystemBus().add_signal_receiver(self.handle_restart, "NameOwnerChanged", "org.freedesktop.DBus")
+            dbus.SystemBus().add_signal_receiver(
+                self.handle_restart,
+                "NameOwnerChanged",
+                "org.freedesktop.DBus",
+            )
             NMDbusInterface.last_disconnect = 1
 
     def add_signal_receiver(self, interface, signal, obj, func, args, kwargs):
@@ -64,13 +67,13 @@ class SignalDispatcher(object):
         if key not in self.handlers:
             return
         try:
-            sender = fixups.base_to_python(kwargs["path"])
+            sender = FixUps.base_to_python(kwargs["path"])
             for arg, (name, signature) in zip(args, self.args[key]):
                 if name:
-                    skwargs[name] = fixups.to_python(type(sender).__name__, kwargs["signal"], name, arg, signature)
+                    skwargs[name] = FixUps.to_python(type(sender).__name__, kwargs["signal"], name, arg, signature)
                 else:
                     # Older NetworkManager versions don"t supply attribute names. Hope for the best.
-                    sargs.append(fixups.to_python(type(sender).__name__, kwargs["signal"], None, arg, signature))
+                    sargs.append(FixUps.to_python(type(sender).__name__, kwargs["signal"], None, arg, signature))
         except dbus.exceptions.DBusException:
             # This happens if the sender went away. Tough luck, no signal for you.
             return
@@ -118,8 +121,8 @@ class NMDbusInterfaceType(type):
     """ Metaclass that generates our classes based on introspection data """
     dbus_service = "org.freedesktop.NetworkManager"
 
-    def __new__(type_, name, bases, attrs):
-        attrs["dbus_service"] = type_.dbus_service
+    def __new__(cls, name, bases, attrs):
+        attrs["dbus_service"] = cls.dbus_service
         attrs["properties"] = []
         attrs["introspection_data"] = None
         attrs["signals"] = []
@@ -144,27 +147,28 @@ class NMDbusInterfaceType(type):
         # If we know where to find this object, let's introspect it and
         # generate properties and methods
         if "object_path" in attrs and attrs["object_path"]:
-            proxy = init_bus.get_object(type_.dbus_service, attrs["object_path"])
-            attrs["introspection_data"] = proxy.Introspect(dbus_interface="org.freedesktop.DBus.Introspectable")
+            proxy = init_bus.get_object(cls.dbus_service, attrs["object_path"])
+            attrs["introspection_data"] = proxy.Introspect(
+                dbus_interface="org.freedesktop.DBus.Introspectable",
+            )
             root = etree.fromstring(attrs["introspection_data"])
             for element in root:
                 if element.tag == "interface" and element.attrib["name"] in attrs["interface_names"]:
                     for item in element:
                         if item.tag == "property":
-                            attrs[item.attrib["name"]] = type_.make_property(name, element.attrib["name"], item.attrib)
+                            attrs[item.attrib["name"]] = cls.make_property(name, element.attrib["name"], item.attrib)
                             attrs["properties"].append(item.attrib["name"])
                         elif item.tag == "method":
                             aname = item.attrib["name"]
                             if aname in attrs:
                                 aname = "_" + aname
-                            attrs[aname] = type_.make_method(name, element.attrib["name"], item.attrib, list(item))
+                            attrs[aname] = cls.make_method(name, element.attrib["name"], item.attrib, list(item))
                         elif item.tag == "signal":
                             SignalDispatcher.args[(element.attrib["name"], item.attrib["name"])] = [(arg.attrib.get("name",None), arg.attrib["type"]) for arg in item]
-                            attrs["On" + item.attrib["name"]] = type_.make_signal(name, element.attrib["name"], item.attrib)
+                            attrs["On" + item.attrib["name"]] = cls.make_signal(name, element.attrib["name"], item.attrib)
                             attrs["signals"].append(item.attrib["name"])
 
-        klass = super(NMDbusInterfaceType, type_).__new__(type_, name, bases, attrs)
-        return klass
+        return super(NMDbusInterfaceType, cls).__new__(cls, name, bases, attrs)
 
     @staticmethod
     def make_property(klass, interface, attrib):
@@ -177,12 +181,12 @@ class NMDbusInterfaceType(type):
                 if e.get_dbus_name() == "org.freedesktop.DBus.Error.UnknownMethod":
                     raise ObjectVanished(self)
                 raise
-            return fixups.to_python(klass, "Get", name, data, attrib["type"])
+            return FixUps.to_python(klass, "Get", name, data, attrib["type"])
         if attrib["access"] == "read":
             return property(get_func)
 
         def set_func(self, value):
-            value = fixups.to_dbus(klass, "Set", name, value, attrib["type"])
+            value = FixUps.to_dbus(klass, "Set", name, value, attrib["type"])
             try:
                 return self.proxy.Set(interface, name, value, dbus_interface="org.freedesktop.DBus.Properties")
             except dbus.exceptions.DBusException as e:
@@ -203,7 +207,7 @@ class NMDbusInterfaceType(type):
         for arg in args:
             argname = arg.attrib["name"]
             signature = arg.attrib["type"]
-            code += "    %s = fixups.to_dbus('%s', '%s', '%s', %s, '%s')\n" % (argname, klass, name, argname, argname, signature)
+            code += "    %s = FixUps.to_dbus('%s', '%s', '%s', %s, '%s')\n" % (argname, klass, name, argname, argname, signature)
         code += "    try:\n"
         code += "        %s = dbus.Interface(self.proxy, '%s').%s(%s)\n" % (outargstr, interface, name, argstr)
         code += "    except dbus.exceptions.DBusException as e:\n"
@@ -213,7 +217,7 @@ class NMDbusInterfaceType(type):
         for arg in outargs:
             argname = arg.attrib["name"]
             signature = arg.attrib["type"]
-            code += "    %s = fixups.to_python('%s', '%s', '%s', %s, '%s')\n" % (argname, klass, name, argname, argname, signature)
+            code += "    %s = FixUps.to_python('%s', '%s', '%s', %s, '%s')\n" % (argname, klass, name, argname, argname, signature)
         code += "    return (%s)" % outargstr
         exec(code, globals(), ret)
         return ret[name]
@@ -228,36 +232,35 @@ class NMDbusInterfaceType(type):
         return ret["On" + name]
 
 
-@six.add_metaclass(NMDbusInterfaceType)
-class NMDbusInterface(object):
+class NMDbusInterface(object, metaclass=NMDbusInterfaceType):
     object_path = None
     last_disconnect = 0
     is_transient = False
 
-    def __new__(klass, object_path=None):
+    def __new__(cls, object_path=None):
         # If we didn't introspect this one at definition time, let's do it now.
-        if object_path and not klass.introspection_data:
-            proxy = dbus.SystemBus().get_object(klass.dbus_service, object_path)
-            klass.introspection_data = proxy.Introspect(dbus_interface="org.freedesktop.DBus.Introspectable")
-            root = etree.fromstring(klass.introspection_data)
+        if object_path and not cls.introspection_data:
+            proxy = dbus.SystemBus().get_object(cls.dbus_service, object_path)
+            cls.introspection_data = proxy.Introspect(dbus_interface="org.freedesktop.DBus.Introspectable")
+            root = etree.fromstring(cls.introspection_data)
             for element in root:
-                if element.tag == "interface" and element.attrib["name"] in klass.interface_names:
+                if element.tag == "interface" and element.attrib["name"] in cls.interface_names:
                     for item in element:
-                        if item.tag == 'property':
-                            setattr(klass, item.attrib["name"], type(klass).make_property(klass.__name__, element.attrib["name"], item.attrib))
-                            klass.properties.append(item.attrib["name"])
-                        elif item.tag == 'method':
+                        if item.tag == "property":
+                            setattr(cls, item.attrib["name"], type(cls).make_property(cls.__name__, element.attrib["name"], item.attrib))
+                            cls.properties.append(item.attrib["name"])
+                        elif item.tag == "method":
                             aname = item.attrib["name"]
-                            if hasattr(klass, aname):
-                                aname = '_' + aname
-                            setattr(klass, aname, type(klass).make_method(klass.__name__, element.attrib["name"], item.attrib, list(item)))
+                            if hasattr(cls, aname):
+                                aname = "_" + aname
+                            setattr(cls, aname, type(cls).make_method(cls.__name__, element.attrib["name"], item.attrib, list(item)))
                         elif item.tag == "signal":
-                            SignalDispatcher.args[(element.attrib["name"], item.attrib["name"])] = [(arg.attrib.get("name",None), arg.attrib['type']) for arg in item]
-                            setattr(klass, "On" + item.attrib["name"], type(klass).make_signal(klass.__name__, element.attrib["name"], item.attrib))
-                            klass.signals.append(item.attrib["name"])
+                            SignalDispatcher.args[(element.attrib["name"], item.attrib["name"])] = [(arg.attrib.get("name",None), arg.attrib["type"]) for arg in item]
+                            setattr(cls, "On" + item.attrib["name"], type(cls).make_signal(cls.__name__, element.attrib["name"], item.attrib))
+                            cls.signals.append(item.attrib["name"])
 
         SignalDispatcher.listen_for_restarts()
-        return super(NMDbusInterface, klass).__new__(klass)
+        return super(NMDbusInterface, cls).__new__(cls)
 
     def __init__(self, object_path=None):
         if isinstance(object_path, NMDbusInterface):
@@ -293,8 +296,8 @@ class TransientNMDbusInterface(NMDbusInterface):
 
 
 class NetworkManager(NMDbusInterface):
-    interface_names = ['org.freedesktop.NetworkManager']
-    object_path = '/org/freedesktop/NetworkManager'
+    interface_names = ["org.freedesktop.NetworkManager"]
+    object_path = "/org/freedesktop/NetworkManager"
 
     # noop method for backward compatibility. It is no longer necessary to call
     # this but let's not break code that does so.
@@ -303,34 +306,34 @@ class NetworkManager(NMDbusInterface):
 
 
 class Statistics(NMDbusInterface):
-    object_path = '/org/freedesktop/NetworkManager/Statistics'
+    object_path = "/org/freedesktop/NetworkManager/Statistics"
 
 
 class Settings(NMDbusInterface):
-    object_path = '/org/freedesktop/NetworkManager/Settings'
+    object_path = "/org/freedesktop/NetworkManager/Settings"
 
 
 class AgentManager(NMDbusInterface):
-    object_path = '/org/freedesktop/NetworkManager/AgentManager'
+    object_path = "/org/freedesktop/NetworkManager/AgentManager"
 
 
 class Connection(NMDbusInterface):
-    interface_names = ['org.freedesktop.NetworkManager.Settings.Connection']
-    has_secrets = ['802-1x', '802-11-wireless-security', 'cdma', 'gsm', 'pppoe', 'vpn']
+    interface_names = ["org.freedesktop.NetworkManager.Settings.Connection"]
+    has_secrets = ["802-1x", "802-11-wireless-security", "cdma", "gsm", "pppoe", "vpn"]
 
     def __init__(self, object_path):
         super(Connection, self).__init__(object_path)
-        self.uuid = self.GetSettings()["connection"]['uuid']
+        self.uuid = self.GetSettings()["connection"]["uuid"]
 
     def GetSecrets(self, name=None):
         settings = self.GetSettings()
         if name is None:
-            name = settings["connection"]['type']
-            name = settings[name].get('security', name)
+            name = settings["connection"]["type"]
+            name = settings[name].get("security", name)
         try:
             return self._GetSecrets(name)
         except dbus.exceptions.DBusException as e:
-            if e.get_dbus_name() != 'org.freedesktop.NetworkManager.AgentManager.NoSecrets':
+            if e.get_dbus_name() != "org.freedesktop.NetworkManager.AgentManager.NoSecrets":
                 raise
             return {key: {} for key in settings}
 
@@ -343,37 +346,37 @@ class Connection(NMDbusInterface):
 
 
 class ActiveConnection(TransientNMDbusInterface):
-    interface_names = ['org.freedesktop.NetworkManager.Connection.Active']
+    interface_names = ["org.freedesktop.NetworkManager.Connection.Active"]
 
-    def __new__(klass, object_path):
-        if klass == ActiveConnection:
+    def __new__(cls, object_path):
+        if cls == ActiveConnection:
             # Automatically turn this into a VPNConnection if needed
-            obj = dbus.SystemBus().get_object(klass.dbus_service, object_path)
-            if obj.Get('org.freedesktop.NetworkManager.Connection.Active', 'Vpn', dbus_interface='org.freedesktop.DBus.Properties'):
+            obj = dbus.SystemBus().get_object(cls.dbus_service, object_path)
+            if obj.Get("org.freedesktop.NetworkManager.Connection.Active", "Vpn", dbus_interface="org.freedesktop.DBus.Properties"):
                 return VPNConnection.__new__(VPNConnection, object_path)
-        return super(ActiveConnection, klass).__new__(klass, object_path)
+        return super(ActiveConnection, cls).__new__(cls, object_path)
 
     def __eq__(self, other):
         return isinstance(other, type(self)) and self.Uuid == other.Uuid
 
 
 class VPNConnection(ActiveConnection):
-    interface_names = ['org.freedesktop.NetworkManager.VPN.Connection']
+    interface_names = ["org.freedesktop.NetworkManager.VPN.Connection"]
 
 
 class Device(NMDbusInterface):
-    interface_names = ['org.freedesktop.NetworkManager.Device', 'org.freedesktop.NetworkManager.Device.Statistics']
+    interface_names = ["org.freedesktop.NetworkManager.Device", "org.freedesktop.NetworkManager.Device.Statistics"]
 
-    def __new__(klass, object_path):
-        if klass == Device:
+    def __new__(cls, object_path):
+        if cls == Device:
             # Automatically specialize the device
             try:
-                obj = dbus.SystemBus().get_object(klass.dbus_service, object_path)
-                klass = device_class(obj.Get('org.freedesktop.NetworkManager.Device', 'DeviceType', dbus_interface='org.freedesktop.DBus.Properties'))
-                return klass.__new__(klass, object_path)
+                obj = dbus.SystemBus().get_object(cls.dbus_service, object_path)
+                cls = device_class(obj.Get("org.freedesktop.NetworkManager.Device", "DeviceType", dbus_interface="org.freedesktop.DBus.Properties"))
+                return cls.__new__(cls, object_path)
             except ObjectVanished:
                 pass
-        return super(Device, klass).__new__(klass, object_path)
+        return super(Device, cls).__new__(cls, object_path)
 
     @staticmethod
     def all():
@@ -514,7 +517,7 @@ class OvsBridge(Device):
 
 
 class NSP(TransientNMDbusInterface):
-    interface_names = ['org.freedesktop.NetworkManager.Wimax.NSP']
+    interface_names = ["org.freedesktop.NetworkManager.Wimax.NSP"]
 
 
 class AccessPoint(NMDbusInterface):
@@ -540,26 +543,25 @@ class DHCP6Config(TransientNMDbusInterface): pass
 class SecretAgentType(type(dbus.service.Object)):
     def __new__(type_, name, bases, attrs):
         if bases != (dbus.service.Object,):
-            attrs['GetSecretsImpl'] = attrs.pop('GetSecrets')
+            attrs["GetSecretsImpl"] = attrs.pop("GetSecrets")
         return super(SecretAgentType, type_).__new__(type_, name, bases, attrs)
 
 
-@six.add_metaclass(SecretAgentType)
-class SecretAgent(dbus.service.Object):
-    object_path = '/org/freedesktop/NetworkManager/SecretAgent'
-    interface_name = 'org.freedesktop.NetworkManager.SecretAgent'
+class SecretAgent(dbus.service.Object, metaclass=SecretAgentType):
+    object_path = "/org/freedesktop/NetworkManager/SecretAgent"
+    interface_name = "org.freedesktop.NetworkManager.SecretAgent"
 
     def __init__(self, identifier):
         self.identifier = identifier
         dbus.service.Object.__init__(self, dbus.SystemBus(), self.object_path)
         AgentManager.Register(self.identifier)
 
-    @dbus.service.method(dbus_interface=interface_name, in_signature='a{sa{sv}}osasu', out_signature='a{sa{sv}}')
+    @dbus.service.method(dbus_interface=interface_name, in_signature="a{sa{sv}}osasu", out_signature="a{sa{sv}}")
     def GetSecrets(self, connection, connection_path, setting_name, hints, flags):
-        settings = fixups.to_python('SecretAgent', 'GetSecrets', "connection", connection, 'a{sa{sv}}')
-        connection = fixups.to_python('SecretAgent', 'GetSecrets', 'connection_path', connection_path, 'o')
-        setting_name = fixups.to_python('SecretAgent', 'GetSecrets', 'setting_name', setting_name, 's')
-        hints = fixups.to_python('SecretAgent', 'GetSecrets', 'hints', hints, 'as')
+        settings = FixUps.to_python("SecretAgent", "GetSecrets", "connection", connection, "a{sa{sv}}")
+        connection = FixUps.to_python("SecretAgent", "GetSecrets", "connection_path", connection_path, "o")
+        setting_name = FixUps.to_python("SecretAgent", "GetSecrets", "setting_name", setting_name, "s")
+        hints = FixUps.to_python("SecretAgent", "GetSecrets", "hints", hints, "as")
         return self.GetSecretsImpl(settings, connection, setting_name, hints, flags)
 
 # These two are interfaces that must be provided to NetworkManager. Keep them
@@ -567,59 +569,59 @@ class SecretAgent(dbus.service.Object):
 #
 # class PPP(NMDbusInterface): pass
 # class VPNPlugin(NMDbusInterface):
-#     interface_names = ['org.freedesktop.NetworkManager.VPN.Plugin']
+#     interface_names = ["org.freedesktop.NetworkManager.VPN.Plugin"]
 
 
 def const(prefix, val):
-    prefix = 'NM_' + prefix.upper() + '_'
+    prefix = "NM_" + prefix.upper() + "_"
     for key, vval in globals().items():
-        if 'REASON' in key and 'REASON' not in prefix:
+        if "REASON" in key and "REASON" not in prefix:
             continue
         if key.startswith(prefix) and val == vval:
-            return key.replace(prefix,'').lower()
+            return key.replace(prefix,"").lower()
     raise ValueError("No constant found for %s* with value %d", (prefix, val))
 
 
 # Several fixer methods to make the data easier to handle in python
 # - SSID sent/returned as bytes (only encoding tried is utf-8)
 # - IP, Mac address and route metric encoding/decoding
-class fixups(object):
+class FixUps(object):
     @staticmethod
     def to_dbus(klass, method, arg, val, signature):
-        if arg in ("connection" 'properties') and signature == 'a{sa{sv}}':
+        if arg in ("connection", "properties") and signature == "a{sa{sv}}":
             settings = copy.deepcopy(val)
             for key in settings:
                 if "mac-address" in settings[key]:
-                    settings[key]["mac-address"] = fixups.mac_to_dbus(settings[key]["mac-address"])
-                if 'cloned-mac-address' in settings[key]:
-                    settings[key]['cloned-mac-address'] = fixups.mac_to_dbus(settings[key]['cloned-mac-address'])
-                if 'bssid' in settings[key]:
-                    settings[key]['bssid'] = fixups.mac_to_dbus(settings[key]['bssid'])
-                for cert in ['ca-cert', 'client-cert', 'phase2-ca-cert', 'phase2-client-cert', 'private-key']:
+                    settings[key]["mac-address"] = FixUps.mac_to_dbus(settings[key]["mac-address"])
+                if "cloned-mac-address" in settings[key]:
+                    settings[key]["cloned-mac-address"] = FixUps.mac_to_dbus(settings[key]["cloned-mac-address"])
+                if "bssid" in settings[key]:
+                    settings[key]["bssid"] = FixUps.mac_to_dbus(settings[key]["bssid"])
+                for cert in ["ca-cert", "client-cert", "phase2-ca-cert", "phase2-client-cert", "private-key"]:
                     if cert in settings[key]:
-                        settings[key][cert] = fixups.cert_to_dbus(settings[key][cert])
-            if "ssid" in settings.get('802-11-wireless', {}):
-                settings['802-11-wireless']["ssid"] = fixups.ssid_to_dbus(settings['802-11-wireless']["ssid"])
+                        settings[key][cert] = FixUps.cert_to_dbus(settings[key][cert])
+            if "ssid" in settings.get("802-11-wireless", {}):
+                settings["802-11-wireless"]["ssid"] = FixUps.ssid_to_dbus(settings["802-11-wireless"]["ssid"])
             if "ipv4" in settings:
-                if 'address-data' in settings["ipv4"]:
-                    for item in settings["ipv4"]['address-data']:
-                        item['prefix'] = dbus.UInt32(item['prefix'])
-                    settings["ipv4"]['address-data'] = dbus.Array(
-                        settings["ipv4"]['address-data'],
-                        signature=dbus.Signature('a{sv}'))
+                if "address-data" in settings["ipv4"]:
+                    for item in settings["ipv4"]["address-data"]:
+                        item["prefix"] = dbus.UInt32(item["prefix"])
+                    settings["ipv4"]["address-data"] = dbus.Array(
+                        settings["ipv4"]["address-data"],
+                        signature=dbus.Signature("a{sv}"))
                 if "addresses" in settings["ipv4"]:
-                    settings["ipv4"]["addresses"] = [fixups.addrconf_to_dbus(addr, socket.AF_INET) for addr in settings["ipv4"]["addresses"]]
+                    settings["ipv4"]["addresses"] = [FixUps.addrconf_to_dbus(addr, socket.AF_INET) for addr in settings["ipv4"]["addresses"]]
                 if "routes" in settings["ipv4"]:
-                    settings["ipv4"]["routes"] = [fixups.route_to_dbus(route, socket.AF_INET) for route in settings["ipv4"]["routes"]]
+                    settings["ipv4"]["routes"] = [FixUps.route_to_dbus(route, socket.AF_INET) for route in settings["ipv4"]["routes"]]
                 if "dns" in settings["ipv4"]:
-                    settings["ipv4"]["dns"] = [fixups.addr_to_dbus(addr, socket.AF_INET) for addr in settings["ipv4"]["dns"]]
+                    settings["ipv4"]["dns"] = [FixUps.addr_to_dbus(addr, socket.AF_INET) for addr in settings["ipv4"]["dns"]]
             if "ipv6" in settings:
                 if "addresses" in settings["ipv6"]:
-                    settings["ipv6"]["addresses"] = [fixups.addrconf_to_dbus(addr, socket.AF_INET6) for addr in settings["ipv6"]["addresses"]]
+                    settings["ipv6"]["addresses"] = [FixUps.addrconf_to_dbus(addr, socket.AF_INET6) for addr in settings["ipv6"]["addresses"]]
                 if "routes" in settings["ipv6"]:
-                    settings["ipv6"]["routes"] = [fixups.route_to_dbus(route, socket.AF_INET6) for route in settings["ipv6"]["routes"]]
+                    settings["ipv6"]["routes"] = [FixUps.route_to_dbus(route, socket.AF_INET6) for route in settings["ipv6"]["routes"]]
                 if "dns" in settings["ipv6"]:
-                    settings["ipv6"]["dns"] = [fixups.addr_to_dbus(addr, socket.AF_INET6) for addr in settings["ipv6"]["dns"]]
+                    settings["ipv6"]["dns"] = [FixUps.addr_to_dbus(addr, socket.AF_INET6) for addr in settings["ipv6"]["dns"]]
             # Get rid of empty arrays/dicts. dbus barfs on them (can't guess
             # signatures), and if they were to get through, NetworkManager
             # ignores them anyway.
@@ -631,75 +633,75 @@ class fixups(object):
                 if settings[key] in ({}, []):
                     del settings[key]
             val = settings
-        return fixups.base_to_dbus(val)
+        return FixUps.base_to_dbus(val)
 
     @staticmethod
     def base_to_dbus(val):
         if isinstance(val, NMDbusInterface):
             return val.object_path
-        if hasattr(val.__class__, 'mro'):
+        if hasattr(val.__class__, "mro"):
             for klass in val.__class__.mro():
-                if klass.__module__ in ('dbus', '_dbus_bindings'):
+                if klass.__module__ in ("dbus", "_dbus_bindings"):
                     return val
-        if hasattr(val, '__iter__') and not isinstance(val, six.string_types):
-            if hasattr(val, 'items'):
-                return dict([(x, fixups.base_to_dbus(y)) for x, y in val.items()])
+        if hasattr(val, "__iter__") and not isinstance(val, str):
+            if hasattr(val, "items"):
+                return dict([(x, FixUps.base_to_dbus(y)) for x, y in val.items()])
             else:
-                return [fixups.base_to_dbus(x) for x in val]
+                return [FixUps.base_to_dbus(x) for x in val]
         return val
 
     @staticmethod
     def to_python(klass, method, arg, val, signature):
-        val = fixups.base_to_python(val)
-        klass_af = {'IP4Config': socket.AF_INET, 'IP6Config': socket.AF_INET6}.get(klass, socket.AF_INET)
-        if method == 'Get':
-            if arg == 'Ip4Address':
-                return fixups.addr_to_python(val, socket.AF_INET)
-            if arg == 'Ip6Address':
-                return fixups.addr_to_python(val, socket.AF_INET6)
-            if arg == 'Ssid':
-                return fixups.ssid_to_python(val)
-            if arg == 'Strength':
-                return fixups.strength_to_python(val)
-            if arg == 'Addresses':
-                return [fixups.addrconf_to_python(addr, klass_af) for addr in val]
-            if arg == 'Routes':
-                return [fixups.route_to_python(route, klass_af) for route in val]
-            if arg in ('Nameservers', 'WinsServers'):
-                return [fixups.addr_to_python(addr, klass_af) for addr in val]
-            if arg == 'Options':
+        val = FixUps.base_to_python(val)
+        klass_af = {"IP4Config": socket.AF_INET, "IP6Config": socket.AF_INET6}.get(klass, socket.AF_INET)
+        if method == "Get":
+            if arg == "Ip4Address":
+                return FixUps.addr_to_python(val, socket.AF_INET)
+            if arg == "Ip6Address":
+                return FixUps.addr_to_python(val, socket.AF_INET6)
+            if arg == "Ssid":
+                return FixUps.ssid_to_python(val)
+            if arg == "Strength":
+                return FixUps.strength_to_python(val)
+            if arg == "Addresses":
+                return [FixUps.addrconf_to_python(addr, klass_af) for addr in val]
+            if arg == "Routes":
+                return [FixUps.route_to_python(route, klass_af) for route in val]
+            if arg in ("Nameservers", "WinsServers"):
+                return [FixUps.addr_to_python(addr, klass_af) for addr in val]
+            if arg == "Options":
                 for key in val:
-                    if key.startswith('requested_'):
+                    if key.startswith("requested_"):
                         val[key] = bool(int(val[key]))
                     elif val[key].isdigit():
                         val[key] = int(val[key])
-                    elif key in ('domain_name_servers', 'ntp_servers', 'routers'):
+                    elif key in ("domain_name_servers", "ntp_servers", "routers"):
                         val[key] = val[key].split()
 
             return val
-        if method == 'GetSettings':
-            if "ssid" in val.get('802-11-wireless', {}):
-                val['802-11-wireless']["ssid"] = fixups.ssid_to_python(val['802-11-wireless']["ssid"])
+        if method == "GetSettings":
+            if "ssid" in val.get("802-11-wireless", {}):
+                val["802-11-wireless"]["ssid"] = FixUps.ssid_to_python(val["802-11-wireless"]["ssid"])
             for key in val:
                 val_ = val[key]
                 if "mac-address" in val_:
-                    val_["mac-address"] = fixups.mac_to_python(val_["mac-address"])
-                if 'cloned-mac-address' in val_:
-                    val_['cloned-mac-address'] = fixups.mac_to_python(val_['cloned-mac-address'])
-                if 'bssid' in val_:
-                    val_['bssid'] = fixups.mac_to_python(val_['bssid'])
+                    val_["mac-address"] = FixUps.mac_to_python(val_["mac-address"])
+                if "cloned-mac-address" in val_:
+                    val_["cloned-mac-address"] = FixUps.mac_to_python(val_["cloned-mac-address"])
+                if "bssid" in val_:
+                    val_["bssid"] = FixUps.mac_to_python(val_["bssid"])
             if "ipv4" in val:
-                val["ipv4"]["addresses"] = [fixups.addrconf_to_python(addr, socket.AF_INET) for addr in val["ipv4"]["addresses"]]
-                val["ipv4"]["routes"] = [fixups.route_to_python(route, socket.AF_INET) for route in val["ipv4"]["routes"]]
-                val["ipv4"]["dns"] = [fixups.addr_to_python(addr, socket.AF_INET) for addr in val["ipv4"]["dns"]]
+                val["ipv4"]["addresses"] = [FixUps.addrconf_to_python(addr, socket.AF_INET) for addr in val["ipv4"]["addresses"]]
+                val["ipv4"]["routes"] = [FixUps.route_to_python(route, socket.AF_INET) for route in val["ipv4"]["routes"]]
+                val["ipv4"]["dns"] = [FixUps.addr_to_python(addr, socket.AF_INET) for addr in val["ipv4"]["dns"]]
             if "ipv6" in val:
-                val["ipv6"]["addresses"] = [fixups.addrconf_to_python(addr, socket.AF_INET6) for addr in val["ipv6"]["addresses"]]
-                val["ipv6"]["routes"] = [fixups.route_to_python(route, socket.AF_INET6) for route in val["ipv6"]["routes"]]
-                val["ipv6"]["dns"] = [fixups.addr_to_python(addr, socket.AF_INET6) for addr in val["ipv6"]["dns"]]
+                val["ipv6"]["addresses"] = [FixUps.addrconf_to_python(addr, socket.AF_INET6) for addr in val["ipv6"]["addresses"]]
+                val["ipv6"]["routes"] = [FixUps.route_to_python(route, socket.AF_INET6) for route in val["ipv6"]["routes"]]
+                val["ipv6"]["dns"] = [FixUps.addr_to_python(addr, socket.AF_INET6) for addr in val["ipv6"]["dns"]]
             return val
-        if method == 'PropertiesChanged':
+        if method == "PropertiesChanged":
             for prop in val:
-                val[prop] = fixups.to_python(klass, 'Get', prop, val[prop], None)
+                val[prop] = FixUps.to_python(klass, "Get", prop, val[prop], None)
         return val
 
     @staticmethod
@@ -707,50 +709,50 @@ class fixups(object):
         if isinstance(val, dbus.ByteArray):
             return "".join([str(x) for x in val])
         if isinstance(val, (dbus.Array, list, tuple)):
-            return [fixups.base_to_python(x) for x in val]
+            return [FixUps.base_to_python(x) for x in val]
         if isinstance(val, (dbus.Dictionary, dict)):
-            return dict([(fixups.base_to_python(x), fixups.base_to_python(y)) for x,y in val.items()])
+            return dict([(FixUps.base_to_python(x), FixUps.base_to_python(y)) for x, y in val.items()])
         if isinstance(val, dbus.ObjectPath):
             for obj in (NetworkManager, Settings, AgentManager):
                 if val == obj.object_path:
                     return obj
-            if val.startswith('/org/freedesktop/NetworkManager/'):
-                classname = val.split('/')[4]
+            if val.startswith("/org/freedesktop/NetworkManager/"):
+                classname = val.split("/")[4]
                 classname = {
-                   'Settings': 'Connection',
-                   'Devices': 'Device',
+                   "Settings": "Connection",
+                   "Devices": "Device",
                 }.get(classname, classname)
                 return globals()[classname](val)
-            if val == '/':
+            if val == "/":
                 return None
         if isinstance(val, (dbus.Signature, dbus.String)):
-            return six.text_type(val)
+            return str(val)
         if isinstance(val, dbus.Boolean):
             return bool(val)
         if isinstance(val, (dbus.Int16, dbus.UInt16, dbus.Int32, dbus.UInt32, dbus.Int64, dbus.UInt64)):
             return int(val)
         if isinstance(val, dbus.Byte):
-            return six.int2byte(int(val))
+            return bytes((int(val),))
         return val
 
     @staticmethod
     def ssid_to_python(ssid):
         try:
-            return bytes().join(ssid).decode('utf-8')
+            return bytes().join(ssid).decode("utf-8")
         except UnicodeDecodeError:
-            ssid = bytes().join(ssid).decode('utf-8', 'replace')
+            ssid = bytes().join(ssid).decode("utf-8", "replace")
             warnings.warn("Unable to decode ssid %s properly" % ssid, UnicodeWarning)
             return ssid
 
     @staticmethod
     def ssid_to_dbus(ssid):
-        if isinstance(ssid, six.text_type):
-            ssid = ssid.encode('utf-8')
+        if isinstance(ssid, str):
+            ssid = ssid.encode("utf-8")
         return [dbus.Byte(x) for x in ssid]
 
     @staticmethod
     def strength_to_python(strength):
-        return struct.unpack('B', strength)[0]
+        return struct.unpack("B", strength)[0]
 
     @staticmethod
     def mac_to_python(mac) -> str:
@@ -758,15 +760,15 @@ class fixups(object):
 
     @staticmethod
     def mac_to_dbus(mac):
-        return [dbus.Byte(int(x, 16)) for x in mac.split(':')]
+        return [dbus.Byte(int(x, 16)) for x in mac.split(":")]
 
     @staticmethod
     def addrconf_to_python(addrconf, family):
         addr, netmask, gateway = addrconf
         return [
-            fixups.addr_to_python(addr, family),
+            FixUps.addr_to_python(addr, family),
             netmask,
-            fixups.addr_to_python(gateway, family)
+            FixUps.addr_to_python(gateway, family)
         ]
 
     @staticmethod
@@ -774,30 +776,30 @@ class fixups(object):
         addr, netmask, gateway = addrconf
         if family == socket.AF_INET:
             return [
-                fixups.addr_to_dbus(addr, family),
-                fixups.mask_to_dbus(netmask),
-                fixups.addr_to_dbus(gateway, family)
+                FixUps.addr_to_dbus(addr, family),
+                FixUps.mask_to_dbus(netmask),
+                FixUps.addr_to_dbus(gateway, family)
             ]
         else:
             return dbus.Struct(
                 (
-                    fixups.addr_to_dbus(addr, family),
-                    fixups.mask_to_dbus(netmask),
-                    fixups.addr_to_dbus(gateway, family)
-                ), signature='ayuay'
+                    FixUps.addr_to_dbus(addr, family),
+                    FixUps.mask_to_dbus(netmask),
+                    FixUps.addr_to_dbus(gateway, family)
+                ), signature="ayuay"
             )
 
     @staticmethod
     def addr_to_python(addr, family):
         if family == socket.AF_INET:
-            return socket.inet_ntop(family,struct.pack('I', addr))
+            return socket.inet_ntop(family,struct.pack("I", addr))
         else:
-            return socket.inet_ntop(family,b''.join(addr))
+            return socket.inet_ntop(family,b"".join(addr))
 
     @staticmethod
     def addr_to_dbus(addr, family):
         if family == socket.AF_INET:
-            return dbus.UInt32(struct.unpack('I', socket.inet_pton(family, addr))[0])
+            return dbus.UInt32(struct.unpack("I", socket.inet_pton(family, addr))[0])
         else:
             return dbus.ByteArray(socket.inet_pton(family, addr))
 
@@ -809,9 +811,9 @@ class fixups(object):
     def route_to_python(route, family):
         addr, netmask, gateway, metric = route
         return [
-            fixups.addr_to_python(addr, family),
+            FixUps.addr_to_python(addr, family),
             netmask,
-            fixups.addr_to_python(gateway, family),
+            FixUps.addr_to_python(gateway, family),
             metric
         ]
 
@@ -819,18 +821,18 @@ class fixups(object):
     def route_to_dbus(route, family):
         addr, netmask, gateway, metric = route
         return [
-            fixups.addr_to_dbus(addr, family),
-            fixups.mask_to_dbus(netmask),
-            fixups.addr_to_dbus(gateway, family),
+            FixUps.addr_to_dbus(addr, family),
+            FixUps.mask_to_dbus(netmask),
+            FixUps.addr_to_dbus(gateway, family),
             metric
         ]
 
     @staticmethod
     def cert_to_dbus(cert):
         if not isinstance(cert, bytes):
-            if not cert.startswith('file://'):
-                cert = 'file://' + cert
-            cert = cert.encode('utf-8') + b'\0'
+            if not cert.startswith("file://"):
+                cert = "file://" + cert
+            cert = cert.encode("utf-8") + b"\0"
         return [dbus.Byte(x) for x in cert]
 
 
